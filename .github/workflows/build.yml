@@ -8,6 +8,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    timeout-minutes: 60
     
     steps:
     - name: Checkout repository
@@ -22,7 +23,6 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y \
-          python3-pip \
           build-essential \
           git \
           zip \
@@ -34,24 +34,46 @@ jobs:
           zlib1g-dev \
           libncurses5-dev \
           libncursesw5-dev \
-          libtinfo5 \
           cmake \
           libffi-dev \
           libssl-dev \
-          automake
+          automake \
+          gettext
 
-    - name: Install Python dependencies
+    - name: Install buildozer
       run: |
-        pip install --upgrade pip
+        pip install --upgrade pip wheel setuptools
         pip install buildozer==1.5.0 cython==0.29.36
 
-    - name: Build APK with Buildozer
+    - name: Update buildozer.spec
       run: |
-        yes | buildozer android debug
-      env:
-        ANDROID_SDK_ROOT: ${{ github.workspace }}/.buildozer/android/platform/android-sdk
+        cat > buildozer.spec << 'EOF'
+        [app]
+        title = Percorsi
+        package.name = percorsi
+        package.domain = org.mattiaprosperi
+        source.dir = .
+        source.include_exts = py,png,jpg,kv,atlas,json
+        version = 1.0.0
+        requirements = python3,kivy==2.2.1,requests,urllib3,certifi,charset-normalizer,idna
+        orientation = portrait
+        fullscreen = 0
+        android.presplash_color = #FF1DA0
+        android.permissions = INTERNET,ACCESS_NETWORK_STATE,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE
+        android.api = 33
+        android.minapi = 21
+        android.ndk_api = 21
+        android.accept_sdk_license = True
+        android.archs = arm64-v8a
+        log_level = 2
+        warn_on_root = 0
+        EOF
 
-    - name: Upload APK artifact
+    - name: Build APK
+      run: |
+        buildozer android debug 2>&1 | tail -5000
+
+    - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
         name: percorsi-android-apk
