@@ -414,3 +414,221 @@ ScreenManager:
         
         Button:
             text: 'APRI GOOGLE MAPS'
+            size_hint_y: None
+            height: 50
+            background_color: 0.2, 0.5, 0.9, 1
+            on_release: app.open_gmaps()
+        
+        BoxLayout:
+            size_hint_y: None
+            height: 50
+            spacing: 10
+            Button:
+                text: 'ESPORTA GPX'
+                on_release: app.export_gpx()
+            Button:
+                text: 'ESPORTA KML'
+                on_release: app.export_kml()
+
+<ProcessingScreen>:
+    name: 'processing'
+    BoxLayout:
+        orientation: 'vertical'
+        padding: 30
+        spacing: 20
+        
+        Widget:
+        
+        Label:
+            text: 'Ottimizzazione in corso...'
+            font_size: '20sp'
+        
+        ProgressBar:
+            id: progress_bar
+            max: 100
+            value: 0
+        
+        Label:
+            id: progress_label
+            text: '0%'
+            font_size: '16sp'
+        
+        Widget:
+        
+        Button:
+            text: 'ANNULLA'
+            size_hint_y: None
+            height: 50
+            on_release: app.cancel_optimization()
+'''
+
+class HomeScreen(Screen):
+    pass
+
+class InputScreen(Screen):
+    pass
+
+class SettingsScreen(Screen):
+    pass
+
+class ResultsScreen(Screen):
+    pass
+
+class ProcessingScreen(Screen):
+    pass
+
+class PercorsiApp(App):
+    coords = ListProperty([])
+    labels = ListProperty([])
+    optimized_coords = ListProperty([])
+    optimized_labels = ListProperty([])
+    distances = ListProperty([])
+    total_distance = NumericProperty(0)
+    is_processing = BooleanProperty(False)
+    
+    def build(self):
+        if platform not in ('android', 'ios'):
+            Window.size = (400, 700)
+        return Builder.load_string(KV)
+    
+    def load_example(self):
+        self.root.ids.coords_input.text = "45.4642,9.1900\n41.9028,12.4964\n43.7696,11.2558\n44.4949,11.3426\n40.8518,14.2681"
+        self.root.ids.labels_input.text = "Milano\nRoma\nFirenze\nBologna\nNapoli"
+        self.parse_coords()
+    
+    def clear_input(self):
+        self.root.ids.coords_input.text = ""
+        self.root.ids.labels_input.text = ""
+        self.root.ids.preview_label.text = "Coordinate: 0"
+    
+    def parse_coords(self):
+        text = self.root.ids.coords_input.text
+        self.coords = parse_coordinates(text)
+        labels_text = self.root.ids.labels_input.text
+        self.labels = [l.strip() for l in labels_text.split('\n') if l.strip()]
+        self.root.ids.preview_label.text = f"Coordinate: {len(self.coords)}"
+    
+    def get_distance_mode(self):
+        spinner_text = self.root.ids.distance_spinner.text
+        if "OSRM" in spinner_text:
+            return "osrm"
+        elif "ORS" in spinner_text:
+            return "ors"
+        return "haversine"
+    
+    def start_optimization(self):
+        self.parse_coords()
+        if len(self.coords) < 2:
+            self.show_popup("Errore", "Inserisci almeno 2 coordinate!")
+            return
+        self.root.current = 'processing'
+        self.is_processing = True
+        thread = threading.Thread(target=self._optimize)
+        thread.daemon = True
+        thread.start()
+    
+    def _optimize(self):
+        def update_progress(p):
+            Clock.schedule_once(lambda dt: self._set_progress(p), 0)
+        
+        try:
+            mode = self.get_distance_mode()
+            tour, total, distances = solve_tsp(self.coords, mode, update_progress)
+            opt_coords = [self.coords[i] for i in tour]
+            opt_labels = [self.labels[i] if i < len(self.labels) else f"Tappa {i+1}" for i in tour]
+            Clock.schedule_once(lambda dt: self._optimization_done(opt_coords, opt_labels, distances, total), 0)
+        except Exception as e:
+            Clock.schedule_once(lambda dt: self._optimization_error(str(e)), 0)
+    
+    def _set_progress(self, p):
+        self.root.ids.progress_bar.value = p * 100
+        self.root.ids.progress_label.text = f"{int(p * 100)}%"
+    
+    def _optimization_done(self, coords, labels, distances, total):
+        self.optimized_coords = coords
+        self.optimized_labels = labels
+        self.distances = distances
+        self.total_distance = total
+        self.is_processing = False
+        
+        dist_str = f"{total/1000:.1f} km" if total >= 1000 else f"{int(total)} m"
+        self.root.ids.result_summary.text = f"Distanza totale: {dist_str}"
+        
+        result_text = ""
+        cumul = 0
+        for i, (coord, label) in enumerate(zip(coords, labels)):
+            d = distances[i] if i < len(distances) else 0
+            cumul += d
+            cumul_str = f"{cumul/1000:.1f} km" if cumul >= 1000 else f"{int(cumul)} m"
+            result_text += f"{i+1}. {label}\n   ({coord[0]:.4f}, {coord[1]:.4f})\n   Distanza: {cumul_str}\n\n"
+        self.root.ids.result_list.text = result_text
+        
+        self.root.current = 'results'
+    
+    def _optimization_error(self, error):
+        self.is_processing = False
+        self.root.current = 'input'
+        self.show_popup("Errore", error)
+    
+    def cancel_optimization(self):
+        self.is_processing = False
+        self.root.current = 'input'
+    
+    def show_results(self):
+        if not self.optimized_coords:
+            self.show_popup("Info", "Nessun risultato. Esegui prima un'ottimizzazione!")
+            return
+        self.root.current = 'results'
+    
+    def open_gmaps(self):
+        if not self.optimized_coords:
+            return
+        links = generate_gmaps_link(self.optimized_coords)
+        if links:
+            import webbrowser
+            webbrowser.open(links[0])
+    
+    def export_gpx(self):
+        if not self.optimized_coords:
+            return
+        gpx = ['<?xml version="1.0" encoding="UTF-8"?>', '<gpx version="1.1" creator="Percorsi">']
+        for i, (lat, lon) in enumerate(self.optimized_coords):
+            name = self.optimized_labels[i] if i < len(self.optimized_labels) else f"Tappa {i+1}"
+            gpx.append(f'<wpt lat="{lat}" lon="{lon}"><n>{name}</n></wpt>')
+        gpx.append('<trk><n>Percorso</n><trkseg>')
+        for lat, lon in self.optimized_coords:
+            gpx.append(f'<trkpt lat="{lat}" lon="{lon}"/>')
+        gpx.append('</trkseg></trk></gpx>')
+        self._save_file('\n'.join(gpx), "percorso.gpx")
+    
+    def export_kml(self):
+        if not self.optimized_coords:
+            return
+        kml = ['<?xml version="1.0" encoding="UTF-8"?>', '<kml xmlns="http://www.opengis.net/kml/2.2">', '<Document><n>Percorso</n>']
+        for i, (lat, lon) in enumerate(self.optimized_coords):
+            name = self.optimized_labels[i] if i < len(self.optimized_labels) else f"Tappa {i+1}"
+            kml.append(f'<Placemark><n>{name}</n><Point><coordinates>{lon},{lat},0</coordinates></Point></Placemark>')
+        coords_str = ' '.join([f"{lon},{lat},0" for lat, lon in self.optimized_coords])
+        kml.append(f'<Placemark><n>Traccia</n><LineString><coordinates>{coords_str}</coordinates></LineString></Placemark>')
+        kml.append('</Document></kml>')
+        self._save_file('\n'.join(kml), "percorso.kml")
+    
+    def _save_file(self, content, filename):
+        try:
+            if platform == 'android':
+                from android.storage import primary_external_storage_path
+                path = os.path.join(primary_external_storage_path(), 'Download', filename)
+            else:
+                path = os.path.join(os.path.expanduser('~'), filename)
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            self.show_popup("Salvato", f"File salvato:\n{filename}")
+        except Exception as e:
+            self.show_popup("Errore", str(e))
+    
+    def show_popup(self, title, message):
+        popup = Popup(title=title, content=Label(text=message), size_hint=(0.8, 0.4))
+        popup.open()
+
+if __name__ == '__main__':
+    PercorsiApp().run()
